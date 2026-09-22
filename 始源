@@ -1,0 +1,107 @@
+import numpy as np
+import wave
+
+SR = 44100
+DURATION = 12.0
+N = int(SR * DURATION)
+
+LAYERS = 12
+POINTS_PER_LAYER = 72
+RINGS = 3
+
+t = np.arange(N) / SR
+left = np.zeros(N)
+right = np.zeros(N)
+rng = np.random.default_rng(17)
+
+# 12層の幾何学構造。
+# 各層は異なる速度で回転し、層ごとに周波数帯もずれる。
+for layer in range(LAYERS):
+    z = -1.0 + 2.0 * layer / (LAYERS - 1)
+    direction = -1 if layer % 2 else 1
+    base_rotation = rng.random() * 2 * np.pi
+
+    # 層を構成する幾何学的な点
+    for p in range(POINTS_PER_LAYER):
+        ring = p % RINGS
+        q = p // RINGS
+
+        angle = (
+            base_rotation
+            + 2*np.pi*q/(POINTS_PER_LAYER/RINGS)
+            + ring*2*np.pi/RINGS
+        )
+
+        # 各点の移動軌道
+        speed = direction * (0.025 + layer*0.0015)
+        a = angle + 2*np.pi*speed*t
+
+        radius = 0.42 + 0.18*ring
+        x = radius*np.cos(a)
+        y = radius*np.sin(a)
+
+        # 幾何学模様の「節」を作る
+        geometry = (
+            0.5
+            + 0.5*np.sin(
+                a*(2 + layer % 5)
+                + layer*0.71
+            )
+        )
+
+        # 空間座標 → 音響パラメータ
+        distance = np.sqrt(x*x + y*y + z*z)
+        freq = (
+            55
+            + 35*layer
+            + 420*geometry
+            + 90*np.sin(a*3 + layer)
+        )
+
+        # 位相を連続的に生成
+        phase = 2*np.pi*np.cumsum(freq)/SR
+        osc = np.sin(phase)
+
+        # 幾何学構造による振幅
+        amp = 0.0028 / (1 + distance*0.8)
+
+        # x座標をステレオ位置へ
+        pan = np.clip(x/0.9, -1, 1)
+        lg = np.sqrt((1-pan)*0.5)
+        rg = np.sqrt((1+pan)*0.5)
+
+        left += osc * amp * lg
+        right += osc * amp * rg
+
+# 空間全体がゆっくり変化するゲート
+field = (
+    0.55
+    + 0.45*np.sin(2*np.pi*0.13*t)
+          * np.sin(2*np.pi*0.071*t + 1.4)
+)
+left *= field
+right *= field
+
+# 微分による簡易なDC/低周波除去
+left = np.concatenate(([0], np.diff(left)))
+right = np.concatenate(([0], np.diff(right)))
+
+# 正規化
+peak = max(np.max(np.abs(left)), np.max(np.abs(right)), 1e-12)
+left /= peak*1.03
+right /= peak*1.03
+
+pcm = np.int16(
+    np.clip(np.column_stack((left, right)), -1, 1) * 32767
+)
+
+out = Path("/mnt/data/layered_geometric_sound_field.wav")
+with wave.open(str(out), "wb") as wf:
+    wf.setnchannels(2)
+    wf.setsampwidth(2)
+    wf.setframerate(SR)
+    wf.writeframes(pcm.tobytes())
+
+print(f"created: {out}")
+print(f"{DURATION}s / {SR}Hz / stereo")
+print(f"{LAYERS} layers × {POINTS_PER_LAYER} points")
